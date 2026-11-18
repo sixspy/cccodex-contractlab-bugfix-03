@@ -52,7 +52,7 @@ createApp({
     const token=ref(localStorage.getItem('contractlab_token')||'');
     const user=ref(localStorage.getItem('contractlab_user')||'');
     const username=ref('admin'), password=ref('123456'), err=ref(''), tab=ref(0), actionErr=ref('');
-    const contracts=ref([]), batches=ref([]), buffers=ref([]), recon=ref({});
+    const contracts=ref([]), batches=ref([]), buffers=ref([]), contentions=ref([]), recon=ref({});
     const form=ref({subject:'订单入站', payload_fields:'order_id,amount'});
     const nav=['契约版本','入站校验','双写缓冲','契约对账'];
     function auth(){return {Authorization:'Bearer '+token.value,'Content-Type':'application/json'};}
@@ -79,17 +79,21 @@ createApp({
       batches.value=Array.isArray(b.items)?b.items:[];
       const u=await loadJson('/api/buffers'); if(u===null) return;
       buffers.value=Array.isArray(u.items)?u.items:[];
+      const w=await loadJson('/api/contention'); if(w===null) return;
+      contentions.value=Array.isArray(w.items)?w.items:[];
       const q=await loadJson('/api/reconcile'); if(q===null) return;
       recon.value=q&&typeof q==='object'?q:{};
     }
     async function validate(){
       actionErr.value='';
       const r=await fetch('/api/ingress/validate',{method:'POST',headers:auth(),body:JSON.stringify(form.value)});
-      const j=await r.json(); actionErr.value=r.ok?('校验结果：'+j.result+(j.missing?('；缺 '+j.missing.join(',')):'')):(j.detail||'失败');
+      const j=await r.json();
+      if(r.status===409){ actionErr.value='校验争用：'+(j.detail||'同载荷校验进行中，已排队'); }
+      else { actionErr.value=r.ok?('校验结果：'+j.result+(j.missing?('；缺 '+j.missing.join(',')):'')):(j.detail||'失败'); }
       await refresh();
     }
     onMounted(()=>{if(token.value)refresh();});
-    return {token,user,username,password,err,tab,nav,contracts,batches,buffers,recon,form,actionErr,login,logout,validate};
+    return {token,user,username,password,err,tab,nav,contracts,batches,buffers,contentions,recon,form,actionErr,login,logout,validate};
   },
   template:`
   <div v-if="!token" class="login">
@@ -136,10 +140,14 @@ createApp({
       <h2>双写缓冲</h2>
       <table><thead><tr><th>缓冲</th><th>批次</th><th>主题</th><th>原因</th></tr></thead>
       <tbody><tr v-for="b in buffers" :key="b.id"><td>{{b.id}}</td><td>{{b.batch_id}}</td><td>{{b.subject}}</td><td>{{b.reason}}</td></tr></tbody></table>
+      <h2 style="margin-top:16px">校验争用账册</h2>
+      <table><thead><tr><th>争用</th><th>主题</th><th>载荷字段</th><th>说明</th></tr></thead>
+      <tbody><tr v-for="w in contentions" :key="w.id"><td>#{{w.id}}</td><td>{{w.subject}}</td><td>{{w.payload_fields}}</td><td>{{w.detail}}</td></tr></tbody></table>
     </div>
     <div class="card" v-show="tab===3">
       <h2>契约对账摘要</h2>
-      <p>入站 {{recon.ingress_total}} · 通过 {{recon.passed}} · 缓冲 {{recon.buffered}} · 拒收 {{recon.rejected}} · 缓冲行 {{recon.buffer_rows}} · 对齐 {{recon.aligned}}</p>
+      <p>入站 {{recon.ingress_total}} · 通过 {{recon.passed}} · 缓冲 {{recon.buffered}} · 拒收 {{recon.rejected}} · 争用 {{recon.contended}} · 缓冲行 {{recon.buffer_rows}} · 对齐 {{recon.aligned}}</p>
+      <p>假通过巡检：<span class="stamp" :class="{bad:recon.false_pass!==0}">{{recon.false_pass===0?'零假通过':'发现 '+recon.false_pass+' 条'}}</span></p>
     </div>
   </div>`
 }).mount('#app');
